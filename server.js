@@ -1,54 +1,52 @@
-const path = require("path");
+const express = require('express');
+const multer = require('multer');
+const fs = require('fs');
+const { v4: uuidv4 } = require('uuid');
+const path = require('path');
 
-// Require the fastify framework and instantiate it
-const fastify = require("fastify")({
-  // set this to true for detailed logging:
-  logger: false,
-});
+const app = express();
+const PORT = 3000;
+const MAX_STORAGE = 100 * 1024 * 1024 * 1024; // 100 GB
 
-// Setup our static files
-fastify.register(require("@fastify/static"), {
-  root: path.join(__dirname, "public"),
-  prefix: "/", // optional: default '/'
-});
+const upload = multer({ dest: 'uploads/' });
+let codes = {};
 
-// fastify-formbody lets us parse incoming forms
-fastify.register(require("@fastify/formbody"));
+app.use(express.static('public'));
+app.use(express.json());
 
-// point-of-view is a templating manager for fastify
-fastify.register(require("@fastify/view"), {
-  engine: {
-    handlebars: require("handlebars"),
-  },
-});
+if (fs.existsSync('codes.json')) {
+  codes = JSON.parse(fs.readFileSync('codes.json'));
+}
 
-// Our main GET home page route, pulls from src/pages/index.hbs
-fastify.get("/", function (request, reply) {
-  // params is an object we'll pass to our handlebars template
-  let params = {
-    greeting: "Hello Node!",
-  };
-  // request.query.paramName <-- a querystring example
-  return reply.view("/src/pages/index.hbs", params);
-});
+function getUsedStorage() {
+  const files = fs.readdirSync('uploads/');
+  return files.reduce((total, file) => {
+    const { size } = fs.statSync(path.join('uploads', file));
+    return total + size;
+  }, 0);
+}
 
-// A POST route to handle form submissions
-fastify.post("/", function (request, reply) {
-  let params = {
-    greeting: "Hello Form!",
-  };
-  // request.body.paramName <-- a form post example
-  return reply.view("/src/pages/index.hbs", params);
-});
+app.post('/upload', upload.single('file'), (req, res) => {
+  const used = getUsedStorage();
 
-// Run the server and report out to the logs
-fastify.listen(
-  { port: process.env.PORT, host: "0.0.0.0" },
-  function (err, address) {
-    if (err) {
-      console.error(err);
-      process.exit(1);
-    }
-    console.log(`Your app is listening on ${address}`);
+  if (used + req.file.size > MAX_STORAGE) {
+    fs.unlinkSync(req.file.path);
+    return res.status(413).send('Storage limit reached (100GB). Try again later.');
   }
-);
+
+  const code = uuidv4().slice(0, 8);
+  codes[code] = req.file.filename;
+  fs.writeFileSync('codes.json', JSON.stringify(codes, null, 2));
+  res.send(`File uploaded! Your code: ${code}`);
+});
+
+app.get('/retrieve/:code', (req, res) => {
+  const file = codes[req.params.code];
+  if (file) {
+    res.download(path.join(__dirname, 'uploads', file));
+  } else {
+    res.status(404).send('Invalid code.');
+  }
+});
+
+app.listen(PORT, () => console.log(`✅ Server running at http://localhost:${PORT}`));
