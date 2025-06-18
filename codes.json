@@ -1,18 +1,1 @@
-{
-  "49afd30b-6da4-47a6-b20d-3d64756d6ced": {
-    "filename": "extra.extra",
-    "customName": "ASFdsgdgrszd",
-    "password": "123333",
-    "expiresAt": 1750274347923,
-    "maxDownloads": 5,
-    "downloadCount": 4
-  },
-  "ea72b1b6-13da-4ff9-b8d9-e7f3fe1b85a7": {
-    "filename": "python-3.13.5-amd64.exe",
-    "customName": "ASFdsgdgrszd.zip",
-    "password": "123333",
-    "expiresAt": 1750487236317,
-    "maxDownloads": 5,
-    "downloadCount": 2
-  }
-}
+{}
