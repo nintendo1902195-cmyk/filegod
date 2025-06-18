@@ -7,18 +7,27 @@ const uuid = require("uuid").v4;
 const app = express();
 const port = process.env.PORT || 3000;
 const uploadDir = path.join(__dirname, "uploads");
-const codesFile = "codes.json";
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
-if (!fs.existsSync(codesFile)) fs.writeFileSync(codesFile, "{}");
+const codesPath = "codes.json";
 
+// Time unit multipliers
 const units = {
-  minutes: 60_000,
-  hours: 3_600_000,
-  days: 86_400_000,
-  weeks: 604_800_000,
-  months: 2_592_000_000,
-  years: 31_536_000_000
+  minutes: 60000,
+  hours: 3600000,
+  days: 86400000,
+  weeks: 604800000,
+  months: 2592000000,
+  years: 31536000000
 };
+
+// Bootstrap files
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
+if (!fs.existsSync(codesPath)) fs.writeFileSync(codesPath, "{}");
+
+// Middleware
+app.use((_, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  next();
+});
 
 const storage = multer.diskStorage({
   destination: (_, __, cb) => cb(null, uploadDir),
@@ -26,14 +35,9 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-app.use((_, res, next) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  next();
-});
-
 function loadCodes() {
   try {
-    return JSON.parse(fs.readFileSync(codesFile));
+    return JSON.parse(fs.readFileSync(codesPath));
   } catch {
     return {};
   }
@@ -41,27 +45,21 @@ function loadCodes() {
 
 function saveCodes(data) {
   try {
-    fs.writeFileSync(codesFile, JSON.stringify(data, null, 2));
+    fs.writeFileSync(codesPath, JSON.stringify(data, null, 2));
   } catch (err) {
     console.error("❌ Failed to save codes:", err);
   }
 }
 
+// 🔼 Upload Route
 app.post("/upload", upload.array("files"), (req, res) => {
+  const { expiresIn, expiresUnit, password, maxDownloads, customFilename } = req.body;
   const codes = loadCodes();
-  const {
-    expiresIn,
-    expiresUnit,
-    password,
-    maxDownloads,
-    customFilename
-  } = req.body;
+  const codesCreated = [];
 
   const expiresAt = expiresIn
     ? Date.now() + parseInt(expiresIn) * (units[expiresUnit] || units.minutes)
     : null;
-
-  const uploaded = [];
 
   for (const file of req.files || []) {
     const code = uuid();
@@ -73,13 +71,14 @@ app.post("/upload", upload.array("files"), (req, res) => {
       maxDownloads: maxDownloads ? parseInt(maxDownloads) : null,
       downloadCount: 0
     };
-    uploaded.push(code);
+    codesCreated.push(code);
   }
 
   saveCodes(codes);
-  res.json({ codes: uploaded });
+  res.json({ codes: codesCreated });
 });
 
+// 🔽 Download Route
 app.get("/download/:code", (req, res) => {
   const codes = loadCodes();
   const info = codes[req.params.code];
@@ -89,7 +88,7 @@ app.get("/download/:code", (req, res) => {
   if (!fs.existsSync(filePath)) return res.status(404).send("File missing");
 
   if (info.expiresAt && Date.now() > info.expiresAt)
-    return res.status(410).send("File expired");
+    return res.status(410).send("Expired");
 
   if (info.password && info.password !== (req.query.password || ""))
     return res.status(403).send("Wrong password");
@@ -98,33 +97,40 @@ app.get("/download/:code", (req, res) => {
     return res.status(429).send("Download limit reached");
 
   res.download(filePath, info.customName || info.filename, () => {
-    const codesNow = loadCodes();
-    const record = codesNow[req.params.code];
-    if (!record) return;
-    record.downloadCount = (record.downloadCount || 0) + 1;
+    const updated = loadCodes();
+    const entry = updated[req.params.code];
+    if (!entry) return;
+    entry.downloadCount += 1;
 
-    const reachedLimit = record.maxDownloads && record.downloadCount >= record.maxDownloads;
-    if (reachedLimit) {
-      fs.unlink(path.join(uploadDir, record.filename), () => {});
-      delete codesNow[req.params.code];
+    const limitReached = entry.maxDownloads && entry.downloadCount >= entry.maxDownloads;
+    if (limitReached) {
+      fs.unlink(filePath, () => {});
+      delete updated[req.params.code];
     }
 
-    saveCodes(codesNow);
+    saveCodes(updated);
   });
 });
 
+// ✅ HEAD check for download preview
 app.head("/download/:code", (req, res) => {
   const codes = loadCodes();
   const info = codes[req.params.code];
   if (!info) return res.status(404).end();
 
+  if (info.expiresAt && Date.now() > info.expiresAt)
+    return res.status(410).end();
+
   const filePath = path.join(uploadDir, info.filename);
   if (!fs.existsSync(filePath)) return res.status(404).end();
-  if (info.expiresAt && Date.now() > info.expiresAt) return res.status(410).end();
-  if (info.password && info.password !== (req.query.password || "")) return res.status(403).end();
-  if (info.maxDownloads && info.downloadCount >= info.maxDownloads) return res.status(429).end();
+
+  if (info.password && info.password !== (req.query.password || ""))
+    return res.status(403).end();
+
+  if (info.maxDownloads && info.downloadCount >= info.maxDownloads)
+    return res.status(429).end();
 
   res.status(200).end();
 });
 
-app.listen(port, () => console.log(`💾 FileGod live on port ${port}`));
+app.listen(port, () => console.log(`💾 FileGod server live on port ${port}`));
