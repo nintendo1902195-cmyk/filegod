@@ -7,9 +7,13 @@ const uuid = require("uuid").v4;
 const app = express();
 const port = process.env.PORT || 3000;
 const uploadDir = path.join(__dirname, "uploads");
-const codesPath = "codes.json";
+const codesFile = "codes.json";
 
-// Time unit multipliers
+// Make sure folders and codes.json exist
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
+if (!fs.existsSync(codesFile)) fs.writeFileSync(codesFile, "{}");
+fs.writeFileSync(path.join(uploadDir, ".keep"), ""); // Keeps uploads folder visible in Glitch
+
 const units = {
   minutes: 60000,
   hours: 3600000,
@@ -19,11 +23,6 @@ const units = {
   years: 31536000000
 };
 
-// Bootstrap files
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
-if (!fs.existsSync(codesPath)) fs.writeFileSync(codesPath, "{}");
-
-// Middleware
 app.use((_, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   next();
@@ -31,35 +30,45 @@ app.use((_, res, next) => {
 
 const storage = multer.diskStorage({
   destination: (_, __, cb) => cb(null, uploadDir),
-  filename: (_, file, cb) => cb(null, file.originalname)
+  filename: (_, file, cb) => {
+    console.log("📥 Saving:", file.originalname);
+    cb(null, file.originalname);
+  }
 });
 const upload = multer({ storage });
 
 function loadCodes() {
   try {
-    return JSON.parse(fs.readFileSync(codesPath));
+    return JSON.parse(fs.readFileSync(codesFile));
   } catch {
     return {};
   }
 }
 
-function saveCodes(data) {
+function saveCodes(codes) {
   try {
-    fs.writeFileSync(codesPath, JSON.stringify(data, null, 2));
+    fs.writeFileSync(codesFile, JSON.stringify(codes, null, 2));
+    console.log("✅ Codes saved:", Object.keys(codes).length);
   } catch (err) {
     console.error("❌ Failed to save codes:", err);
   }
 }
 
-// 🔼 Upload Route
 app.post("/upload", upload.array("files"), (req, res) => {
-  const { expiresIn, expiresUnit, password, maxDownloads, customFilename } = req.body;
   const codes = loadCodes();
-  const codesCreated = [];
+  const {
+    expiresIn,
+    expiresUnit,
+    password,
+    maxDownloads,
+    customFilename
+  } = req.body;
 
   const expiresAt = expiresIn
     ? Date.now() + parseInt(expiresIn) * (units[expiresUnit] || units.minutes)
     : null;
+
+  const codesCreated = [];
 
   for (const file of req.files || []) {
     const code = uuid();
@@ -78,7 +87,6 @@ app.post("/upload", upload.array("files"), (req, res) => {
   res.json({ codes: codesCreated });
 });
 
-// 🔽 Download Route
 app.get("/download/:code", (req, res) => {
   const codes = loadCodes();
   const info = codes[req.params.code];
@@ -102,8 +110,8 @@ app.get("/download/:code", (req, res) => {
     if (!entry) return;
     entry.downloadCount += 1;
 
-    const limitReached = entry.maxDownloads && entry.downloadCount >= entry.maxDownloads;
-    if (limitReached) {
+    const shouldDelete = entry.maxDownloads && entry.downloadCount >= entry.maxDownloads;
+    if (shouldDelete) {
       fs.unlink(filePath, () => {});
       delete updated[req.params.code];
     }
@@ -112,25 +120,18 @@ app.get("/download/:code", (req, res) => {
   });
 });
 
-// ✅ HEAD check for download preview
 app.head("/download/:code", (req, res) => {
   const codes = loadCodes();
   const info = codes[req.params.code];
   if (!info) return res.status(404).end();
 
-  if (info.expiresAt && Date.now() > info.expiresAt)
-    return res.status(410).end();
-
   const filePath = path.join(uploadDir, info.filename);
   if (!fs.existsSync(filePath)) return res.status(404).end();
-
-  if (info.password && info.password !== (req.query.password || ""))
-    return res.status(403).end();
-
-  if (info.maxDownloads && info.downloadCount >= info.maxDownloads)
-    return res.status(429).end();
+  if (info.expiresAt && Date.now() > info.expiresAt) return res.status(410).end();
+  if (info.password && info.password !== (req.query.password || "")) return res.status(403).end();
+  if (info.maxDownloads && info.downloadCount >= info.maxDownloads) return res.status(429).end();
 
   res.status(200).end();
 });
 
-app.listen(port, () => console.log(`💾 FileGod server live on port ${port}`));
+app.listen(port, () => console.log(`💾 FileGod running on port ${port}`));
