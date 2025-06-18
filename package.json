@@ -10,7 +10,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "express": "^5.1.0",
+    "express": "^4.21.2",
     "multer": "^2.0.1",
     "uuid": "^11.1.0"
   },
