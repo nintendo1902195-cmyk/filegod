@@ -22,5 +22,23 @@
     "expiresAt": 1750483938577,
     "maxDownloads": 5,
     "downloadCount": 4
+  },
+  "57ad34d4-072e-4e48-b8c9-4fb1f42084af": {
+    "filename": "iis_Stupid_Menu (1).dll",
+    "customName": null,
+    "password": "7777",
+    "expiresAt": 1750947607615,
+    "maxDownloads": 7,
+    "downloadCount": 2,
+    "isMalicious": false
+  },
+  "8faf7751-ad58-4aa0-aedc-1ad9e09a9fb8": {
+    "filename": "iis_Stupid_Menu (1).dll",
+    "customName": null,
+    "password": "7777",
+    "expiresAt": 1750947757220,
+    "maxDownloads": 7777,
+    "downloadCount": 2,
+    "isMalicious": false
   }
 }

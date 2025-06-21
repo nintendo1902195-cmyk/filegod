@@ -3,7 +3,8 @@ const multer = require("multer");
 const fs = require("fs");
 const path = require("path");
 const uuid = require("uuid").v4;
-const axios = require("axios"); // Added for VirusTotal API
+const axios = require("axios");
+const FormData = require("form-data"); // Import FormData for VirusTotal
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -63,12 +64,16 @@ function saveCodes(codes) {
 async function scanFileWithVirusTotal(filePath) {
   try {
     const fileStream = fs.createReadStream(filePath);
-    const response = await axios.post(VIRUSTOTAL_API_URL, fileStream, {
+    const formData = new FormData();
+    formData.append("file", fileStream);
+
+    const response = await axios.post(VIRUSTOTAL_API_URL, formData, {
       headers: {
         "x-apikey": VIRUSTOTAL_API_KEY,
-        "Content-Type": "multipart/form-data",
+        ...formData.getHeaders(), // Include the correct headers for multipart/form-data
       },
     });
+
     return response.data;
   } catch (error) {
     console.error("❌ VirusTotal scan failed:", error.response?.data || error.message);
@@ -89,6 +94,7 @@ app.post("/upload", upload.array("files"), async (req, res) => {
 
   for (const file of req.files || []) {
     const filePath = path.join(uploadDir, file.filename);
+    let isMalicious = false;
 
     // Scan the file with VirusTotal
     try {
@@ -97,14 +103,13 @@ app.post("/upload", upload.array("files"), async (req, res) => {
 
       if (maliciousCount > 0) {
         console.log(`🚨 Malicious file detected: ${file.filename}`);
-        fs.unlinkSync(filePath); // Delete the malicious file
-        return res.status(400).json({ error: "Malicious file detected", file: file.filename });
+        isMalicious = true; // Mark the file as malicious
       }
     } catch (err) {
-      return res.status(500).json({ error: "VirusTotal scan failed", details: err.message });
+      console.error("❌ VirusTotal scan failed:", err.message);
     }
 
-    // Save file metadata if it's clean
+    // Save file metadata
     const code = uuid();
     codes[code] = {
       filename: file.filename,
@@ -113,6 +118,7 @@ app.post("/upload", upload.array("files"), async (req, res) => {
       expiresAt,
       maxDownloads: maxDownloads ? parseInt(maxDownloads) : null,
       downloadCount: 0,
+      isMalicious, // Store the malicious flag
     };
     codesCreated.push(code);
   }
@@ -139,6 +145,23 @@ app.get("/download/:code", (req, res) => {
   if (info.maxDownloads && info.downloadCount >= info.maxDownloads)
     return res.status(429).send("Download limit reached");
 
+  // Check if the file is flagged as malicious
+  if (info.isMalicious) {
+    return res.send(`
+      <html>
+        <body>
+          <h1>⚠️ Warning</h1>
+          <p>Your device can be damaged if this file is executed.</p>
+          <p>Are you sure you want to download it?</p>
+          <form method="GET" action="/confirm-download/${req.params.code}">
+            <button type="submit">Yes, Download</button>
+          </form>
+        </body>
+      </html>
+    `);
+  }
+
+  // Proceed with the download if the file is clean
   res.download(filePath, info.customName || info.filename, () => {
     const updated = loadCodes();
     const entry = updated[req.params.code];
@@ -155,19 +178,29 @@ app.get("/download/:code", (req, res) => {
   });
 });
 
-// Head endpoint for checking file status
-app.head("/download/:code", (req, res) => {
+// Confirm download endpoint for malicious files
+app.get("/confirm-download/:code", (req, res) => {
   const codes = loadCodes();
   const info = codes[req.params.code];
-  if (!info) return res.status(404).end();
+  if (!info) return res.status(404).send("Invalid code");
 
   const filePath = path.join(uploadDir, info.filename);
-  if (!fs.existsSync(filePath)) return res.status(404).end();
-  if (info.expiresAt && Date.now() > info.expiresAt) return res.status(410).end();
-  if (info.password && info.password !== (req.query.password || "")) return res.status(403).end();
-  if (info.maxDownloads && info.downloadCount >= info.maxDownloads) return res.status(429).end();
+  if (!fs.existsSync(filePath)) return res.status(404).send("File missing");
 
-  res.status(200).end();
+  res.download(filePath, info.customName || info.filename, () => {
+    const updated = loadCodes();
+    const entry = updated[req.params.code];
+    if (!entry) return;
+    entry.downloadCount += 1;
+
+    const shouldDelete = entry.maxDownloads && entry.downloadCount >= entry.maxDownloads;
+    if (shouldDelete) {
+      fs.unlink(filePath, () => {});
+      delete updated[req.params.code];
+    }
+
+    saveCodes(updated);
+  });
 });
 
 // Start the server
