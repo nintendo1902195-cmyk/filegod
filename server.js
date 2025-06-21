@@ -3,11 +3,16 @@ const multer = require("multer");
 const fs = require("fs");
 const path = require("path");
 const uuid = require("uuid").v4;
+const axios = require("axios"); // Added for VirusTotal API
 
 const app = express();
 const port = process.env.PORT || 3000;
 const uploadDir = path.join(__dirname, "uploads");
 const codesFile = "codes.json";
+
+// VirusTotal API setup
+const VIRUSTOTAL_API_KEY = "c3d01487f74daf577a66030da8c819a49b93c39137190fd0084788e039a5d9cd"; // Replace with your API key
+const VIRUSTOTAL_API_URL = "https://www.virustotal.com/api/v3/files";
 
 // Make sure folders and codes.json exist
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
@@ -20,7 +25,7 @@ const units = {
   days: 86400000,
   weeks: 604800000,
   months: 2592000000,
-  years: 31536000000
+  years: 31536000000,
 };
 
 app.use((_, res, next) => {
@@ -33,7 +38,7 @@ const storage = multer.diskStorage({
   filename: (_, file, cb) => {
     console.log("📥 Saving:", file.originalname);
     cb(null, file.originalname);
-  }
+  },
 });
 const upload = multer({ storage });
 
@@ -54,15 +59,27 @@ function saveCodes(codes) {
   }
 }
 
-app.post("/upload", upload.array("files"), (req, res) => {
+// Function to scan files with VirusTotal
+async function scanFileWithVirusTotal(filePath) {
+  try {
+    const fileStream = fs.createReadStream(filePath);
+    const response = await axios.post(VIRUSTOTAL_API_URL, fileStream, {
+      headers: {
+        "x-apikey": VIRUSTOTAL_API_KEY,
+        "Content-Type": "multipart/form-data",
+      },
+    });
+    return response.data;
+  } catch (error) {
+    console.error("❌ VirusTotal scan failed:", error.response?.data || error.message);
+    throw new Error("VirusTotal scan failed");
+  }
+}
+
+// Upload endpoint with VirusTotal integration
+app.post("/upload", upload.array("files"), async (req, res) => {
   const codes = loadCodes();
-  const {
-    expiresIn,
-    expiresUnit,
-    password,
-    maxDownloads,
-    customFilename
-  } = req.body;
+  const { expiresIn, expiresUnit, password, maxDownloads, customFilename } = req.body;
 
   const expiresAt = expiresIn
     ? Date.now() + parseInt(expiresIn) * (units[expiresUnit] || units.minutes)
@@ -71,6 +88,23 @@ app.post("/upload", upload.array("files"), (req, res) => {
   const codesCreated = [];
 
   for (const file of req.files || []) {
+    const filePath = path.join(uploadDir, file.filename);
+
+    // Scan the file with VirusTotal
+    try {
+      const scanResult = await scanFileWithVirusTotal(filePath);
+      const maliciousCount = scanResult.data.attributes.last_analysis_stats.malicious;
+
+      if (maliciousCount > 0) {
+        console.log(`🚨 Malicious file detected: ${file.filename}`);
+        fs.unlinkSync(filePath); // Delete the malicious file
+        return res.status(400).json({ error: "Malicious file detected", file: file.filename });
+      }
+    } catch (err) {
+      return res.status(500).json({ error: "VirusTotal scan failed", details: err.message });
+    }
+
+    // Save file metadata if it's clean
     const code = uuid();
     codes[code] = {
       filename: file.filename,
@@ -78,7 +112,7 @@ app.post("/upload", upload.array("files"), (req, res) => {
       password: password || null,
       expiresAt,
       maxDownloads: maxDownloads ? parseInt(maxDownloads) : null,
-      downloadCount: 0
+      downloadCount: 0,
     };
     codesCreated.push(code);
   }
@@ -87,6 +121,7 @@ app.post("/upload", upload.array("files"), (req, res) => {
   res.json({ codes: codesCreated });
 });
 
+// Download endpoint
 app.get("/download/:code", (req, res) => {
   const codes = loadCodes();
   const info = codes[req.params.code];
@@ -120,6 +155,7 @@ app.get("/download/:code", (req, res) => {
   });
 });
 
+// Head endpoint for checking file status
 app.head("/download/:code", (req, res) => {
   const codes = loadCodes();
   const info = codes[req.params.code];
@@ -134,4 +170,5 @@ app.head("/download/:code", (req, res) => {
   res.status(200).end();
 });
 
+// Start the server
 app.listen(port, () => console.log(`💾 FileGod running on port ${port}`));
